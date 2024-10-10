@@ -4,7 +4,7 @@
 [![AWS SAM](https://img.shields.io/badge/AWS%20SAM-Serverless%20Application%20Model-orange.svg)](https://aws.amazon.com/serverless/sam/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](#)
 
-The **Splunk Log Collector** is a Python-based solution designed to collect identity logs from multiple sources (e.g., Ping, MyID, Okta) via Splunk's REST API. It consolidates logs from different identity sources, processes them, and sends the data to AWS EventBridge and S3 for further analysis.
+The **Splunk Log Collector** is a robust, scalable, and extensible Python-based solution designed to aggregate identity logs from multiple sources (e.g., Ping, MyID, Okta) using Splunk's REST API. It consolidates logs from different identity sources, processes them, and sends the data to AWS EventBridge and S3 for centralized, near real-time analysis.
 
 ---
 
@@ -39,11 +39,16 @@ The **Splunk Log Collector** is a Python-based solution designed to collect iden
   - [Git Workflow](#git-workflow)
   - [Dependency Management](#dependency-management)
   - [AWS Lambda Powertools](#aws-lambda-powertools)
-- [Mermaid.js Flowchart Diagrams](#mermaidjs-flowchart-diagrams)
+- [Deep Dive into the Splunk Log Collector](#deep-dive-into-the-splunk-log-collector)
+  - [High-Level Architecture](#high-level-architecture)
+  - [Detailed Component Breakdown](#detailed-component-breakdown)
+  - [Data Flow Details](#data-flow-details)
+  - [Implemented Improvements](#implemented-improvements)
+- [Mermaid.js Diagrams](#mermaidjs-diagrams)
   - [High-Level System Architecture](#high-level-system-architecture)
   - [AWS Step Functions Workflow](#aws-step-functions-workflow)
   - [Lambda Function Interactions](#lambda-function-interactions)
-  - [Class Inheritance Diagram](#class-inheritance-diagram)
+  - [Class Composition Diagram](#class-composition-diagram)
 
 ---
 
@@ -60,24 +65,25 @@ The **Splunk Log Collector** streamlines the collection of identity logs from mu
 
 ## Architecture
 
-The system architecture leverages several AWS services to orchestrate, process, and store log data efficiently.
+The system leverages AWS services to orchestrate, process, and store log data efficiently, ensuring scalability and reliability suitable for large enterprises.
 
 - **AWS Step Functions (State Machine):** Orchestrates the workflow of initiating Splunk queries, polling for job completion, and processing results.
-- **AWS Lambda Functions:** Handle communication with Splunk, process data, and send it to AWS EventBridge and S3.
-- **Splunk REST API:** Used to query and retrieve logs from Splunk instances.
+- **AWS Lambda Functions:** Handle communication with Splunk, process data, and interact with AWS services.
+- **Splunk REST API:** Used to execute searches and retrieve results from Splunk instances.
 - **AWS EventBridge:** Receives processed events from Lambda functions for downstream processing.
 - **AWS S3 Buckets:** Stores raw logs from each identity source.
 - **AWS Secrets Manager:** Securely stores credentials for accessing Splunk instances.
 - **AWS Lambda Powertools:** Utilized for logging, metrics, and tracing within Lambda functions.
+- **Configuration and Parser Modules:** Use composition over inheritance for managing identity sources.
 
 ### Architecture Diagram
 
 ```mermaid
 flowchart TD
     subgraph AWS
-        A[Step Functions State Machine] -->|Start Query| B[Lambda: Initiate Splunk Job]
-        B --> C[Lambda: Poll for Job Completion]
-        C -->|Job Ready| D[Lambda: Process Results]
+        A[Step Functions State Machine] -->|Start Query| B[Lambda: InitiateSplunkJob]
+        B --> C[Lambda: PollJobStatus]
+        C -->|Job Ready| D[Lambda: ProcessResults]
         D --> E[EventBridge]
         D --> F[S3 Bucket]
     end
@@ -94,7 +100,9 @@ flowchart TD
 
 - **Real-Time Log Collection:** Collect logs in near real-time by polling Splunk for job completion and reading results in chunks.
 - **Scalable Design:** Efficiently handle large volumes of data by chunking results and managing concurrent read requests.
-- **Extensible Collectors:** Easily add new identity sources by extending the generic collector.
+- **Extensible Collectors:** Easily add new identity sources using composition over inheritance.
+- **Robust Error Handling:** Enhanced fault tolerance and reliability with comprehensive error handling.
+- **Comprehensive Observability:** Improved logging, metrics, and tracing for monitoring.
 - **PEP8 Compliant Code:** Follows Python's PEP8 style guidelines, enforced via linters like Flake8 and Black.
 - **Automated Testing:** Uses `pytest`, `pytest-cov`, and `moto` for unit tests and coverage.
 - **Dependency Management:** Managed via Poetry, ensuring consistent environments across development and deployment.
@@ -120,7 +128,7 @@ flowchart TD
 ### Prerequisites
 
 - **Python 3.11.6**
-- **AWS Account** with permissions to deploy resources (Lambda, Step Functions, EventBridge, S3, Secrets Manager).
+- **AWS Account** with permissions to deploy resources.
 - **Access to Splunk Instances** with REST API enabled.
 - **Poetry** for dependency management.
 - **AWS SAM CLI** for deployment.
@@ -194,7 +202,7 @@ This project uses AWS SAM (Serverless Application Model) for deployment.
 
 ### Triggering the Collector
 
-The log collection process is initiated via the AWS Step Functions State Machine. You can trigger it manually or set up an AWS CloudWatch Event rule to trigger it on a schedule.
+The log collection process is initiated via the AWS Step Functions State Machine. You can trigger it manually or set up an AWS CloudWatch Events rule to trigger it on a schedule.
 
 **Manual Trigger:**
 
@@ -207,9 +215,8 @@ The log collection process is initiated via the AWS Step Functions State Machine
 
 ```json
 {
-  "secret_name": "splunk/ping",
-  "query": "search index=ping_identity sourcetype=ping:logs earliest=-15m@m latest=now",
-  "timeframe": "-15m@m to now"
+  "identity_source": "ping",
+  "query": "search index=ping_identity sourcetype=ping:logs earliest=-15m@m latest=now"
 }
 ```
 
@@ -218,12 +225,14 @@ The log collection process is initiated via the AWS Step Functions State Machine
 ```mermaid
 stateDiagram
     [*] --> InitiateSplunkJob
-    InitiateSplunkJob --> PollJobStatus
-    PollJobStatus --> PollJobStatus: Job Not Ready
-    PollJobStatus --> ProcessResults: Job Ready
-    ProcessResults --> SendToEventBridge
-    SendToEventBridge --> StoreInS3
-    StoreInS3 --> [*]
+    InitiateSplunkJob --> WaitForJobCompletion
+    WaitForJobCompletion --> PollJobStatus
+    PollJobStatus --> JobCompleteChoice
+    JobCompleteChoice --> ProcessResults: Job Ready
+    JobCompleteChoice --> CalculateWaitTime: Job Not Ready
+    CalculateWaitTime --> WaitForJobCompletion
+    ProcessResults --> Cleanup
+    Cleanup --> [*]
 ```
 
 ## Configuration
@@ -249,11 +258,21 @@ Store your Splunk credentials securely in AWS Secrets Manager.
 Configure Splunk queries for each identity source in the `config.py` file or via environment variables.
 
 ```python
-# src/utils/config.py
+# src/config/identity_source_config.py
 
-QUERIES = {
-    "ping": "search index=ping_identity sourcetype=ping:logs earliest=-15m@m latest=now",
-    "myid": "search index=myid_identity sourcetype=myid:logs earliest=-15m@m latest=now"
+IDENTITY_SOURCE_CONFIGS = {
+    "ping": IdentitySourceConfig(
+        name="ping",
+        query="search index=ping_identity sourcetype=ping:logs earliest=-15m@m latest=now",
+        parser=PingParser(),
+        secret_name="splunk/ping"
+    ),
+    "myid": IdentitySourceConfig(
+        name="myid",
+        query="search index=myid_identity sourcetype=myid:logs earliest=-15m@m latest=now",
+        parser=MyIDParser(),
+        secret_name="splunk/myid"
+    )
 }
 ```
 
@@ -262,6 +281,7 @@ QUERIES = {
 Set additional environment variables required for your application in the AWS Lambda function configuration or in a `.env` file for local testing.
 
 - **LOG_LEVEL:** Set the logging level (e.g., `INFO`, `DEBUG`).
+- **S3_BUCKET_NAME:** Name of the S3 bucket for storing logs.
 - **MAX_CONCURRENT_READS:** Maximum number of concurrent read requests to Splunk.
 
 ## Repository Structure
@@ -278,19 +298,30 @@ splunk-log-collector/
 │   ├── collector/
 │   │   ├── __init__.py
 │   │   ├── generic_collector.py
-│   │   ├── ping_collector.py
-│   │   ├── myid_collector.py
-│   │   └── handler.py        # Lambda function entry points
-│   └── utils/
-│       ├── __init__.py
-│       ├── config.py
-│       └── logger.py
+│   │   ├── handler.py        # Lambda function entry points
+│   ├── config/
+│   │   ├── __init__.py
+│   │   └── identity_source_config.py
+│   ├── parsers/
+│   │   ├── __init__.py
+│   │   ├── base_parser.py
+│   │   ├── ping_parser.py
+│   │   └── myid_parser.py
+│   ├── services/
+│   │   ├── __init__.py
+│   │   ├── aws_service.py
+│   │   └── splunk_service.py
+│   ├── utils/
+│   │   ├── __init__.py
+│   │   ├── logger.py
+│   │   └── helpers.py
 ├── tests/
 │   ├── __init__.py
 │   ├── conftest.py           # Fixtures for tests
 │   ├── test_generic_collector.py
-│   ├── test_ping_collector.py
-│   └── test_myid_collector.py
+│   ├── test_parsers.py
+│   ├── test_services.py
+│   └── test_handlers.py
 └── docs/
     ├── architecture.md
     ├── development_guide.md
@@ -301,14 +332,21 @@ splunk-log-collector/
 ### Directory and File Descriptions
 
 - **`src/`**: Contains the source code.
-  - **`collector/`**: Modules for the generic and source-specific collectors.
-    - **`generic_collector.py`**: Implements the base collector class.
-    - **`ping_collector.py`**: Extends the generic collector for Ping.
-    - **`myid_collector.py`**: Extends the generic collector for MyID.
+  - **`collector/`**: Modules for the generic collector and Lambda handlers.
+    - **`generic_collector.py`**: Implements the collector using composition.
     - **`handler.py`**: Entry points for AWS Lambda functions.
+  - **`config/`**: Configuration modules.
+    - **`identity_source_config.py`**: Defines configurations for identity sources.
+  - **`parsers/`**: Parser modules for different identity sources.
+    - **`base_parser.py`**: Base parser interface.
+    - **`ping_parser.py`**: Parser for Ping identity logs.
+    - **`myid_parser.py`**: Parser for MyID identity logs.
+  - **`services/`**: Service modules for external interactions.
+    - **`splunk_service.py`**: Handles interactions with Splunk REST API.
+    - **`aws_service.py`**: Manages AWS service interactions (EventBridge, S3).
   - **`utils/`**: Utility modules.
-    - **`config.py`**: Configuration settings and constants.
     - **`logger.py`**: Logging configuration using AWS Lambda Powertools.
+    - **`helpers.py`**: Helper functions.
 - **`tests/`**: Contains unit tests.
   - **`conftest.py`**: Fixtures and common test utilities.
 - **`docs/`**: Additional documentation.
@@ -343,13 +381,13 @@ Open `htmlcov/index.html` in a browser to view the coverage report.
 We use `moto` to mock AWS services and `unittest.mock` for external services like Splunk.
 
 ```python
-# tests/test_generic_collector.py
+# tests/test_splunk_service.py
 
 from moto import mock_secretsmanager
-from unittest.mock import patch
+from unittest.mock import MagicMock
 
 @mock_secretsmanager
-def test_get_splunk_credentials():
+def test_initiate_job():
     # Test implementation
 ```
 
@@ -390,7 +428,7 @@ def test_get_splunk_credentials():
   - Maintain or improve code coverage.
   - Request at least one code review before merging.
 - **Code Reviews:**
-  - Use GitLab's merge request system.
+  - Use GitHub's pull request system.
   - Address all comments before approval.
 
 ### Dependency Management
@@ -427,17 +465,63 @@ def lambda_handler(event, context):
     # Handler code
 ```
 
-## Mermaid.js Flowchart Diagrams
+## Deep Dive into the Splunk Log Collector
+
+### High-Level Architecture
+
+The system is designed to handle large volumes of data efficiently, ensuring scalability and reliability suitable for a Fortune 10 company. It leverages AWS services to orchestrate and process data, incorporating best practices for high performance and maintainability.
+
+- **Initiation:** The process starts via a scheduled trigger or manually, initiating the AWS Step Functions state machine.
+- **Splunk Job Initiation:** A Lambda function starts a Splunk search job using the provided query and identity source configuration.
+- **Job Polling:** Employs an adaptive polling mechanism with exponential backoff to efficiently check the job status.
+- **Result Processing:** Upon job completion, a Lambda function retrieves results in manageable chunks, processes the logs using source-specific parsers, and prepares them for downstream consumption.
+- **Data Forwarding:** Processed logs are sent to AWS EventBridge, and raw logs are stored in AWS S3, both optimized for high throughput.
+- **Cleanup:** The Splunk job is canceled to release resources.
+- **Observability:** Comprehensive logging, metrics, and tracing are implemented for monitoring and troubleshooting.
+
+### Detailed Component Breakdown
+
+- **AWS Step Functions State Machine:** Orchestrates the sequence of Lambda functions, managing retries, error handling, and the overall workflow.
+- **AWS Lambda Functions:** Perform specific tasks such as initiating Splunk jobs, polling for job completion, processing results, and interacting with AWS services.
+- **Splunk REST API Interaction:** Facilitates communication with Splunk for job management and data retrieval.
+- **AWS Secrets Manager:** Securely stores and retrieves credentials needed to access Splunk instances.
+- **AWS EventBridge:** Acts as an event bus to route processed log events to downstream systems efficiently.
+- **AWS S3:** Stores raw logs for archival, with optimized storage patterns for performance.
+- **Configuration and Parser Modules:** Manages identity source configurations and parsing logic using composition over inheritance.
+- **Observability Enhancements:** Provides comprehensive logging, metrics, and tracing for monitoring and troubleshooting.
+
+### Data Flow Details
+
+1. **Initiating a Splunk Search Job:** Optimized queries are used for faster execution.
+2. **Polling for Job Completion:** Adaptive polling with exponential backoff reduces unnecessary API calls.
+3. **Retrieving and Processing Results:** Results are fetched in chunks, and logs are transformed using source-specific parsers.
+4. **Sending Events to EventBridge:** Events are batched and sent efficiently.
+5. **Storing Raw Logs in S3:** Logs are compressed and stored using optimized storage patterns.
+
+### Implemented Improvements
+
+- **Scalability Enhancements:** Chunked processing, concurrency, and resource optimization.
+- **Efficiency in Polling Mechanism:** Adaptive polling and optimized Splunk queries.
+- **Simplifying Addition of New Identity Sources:** Composition over inheritance and configuration files.
+- **Optimizing AWS EventBridge and S3 Usage:** Data payload optimization and batching.
+- **Enhanced Error Handling and Fault Tolerance:** Robust exception handling and retries.
+- **Reducing Latency in Multi-Step Processing:** Workflow optimization and asynchronous processing.
+- **Improved Observability and Monitoring:** Structured logging, custom metrics, and distributed tracing.
+- **Data Ordering and Consistency:** Sequence numbers and timestamps included in events.
+
+---
+
+## Mermaid.js Diagrams
 
 ### High-Level System Architecture
 
 ```mermaid
 flowchart TD
     subgraph AWS
-        A[Step Functions State Machine] -->|Start Query| B[Lambda: Initiate Splunk Job]
-        B --> C[Lambda: Poll for Job Completion]
+        A[Step Functions State Machine] -->|Start Query| B[Lambda: InitiateSplunkJob]
+        B --> C[Lambda: PollJobStatus]
         C -->|Job Not Ready| C
-        C -->|Job Ready| D[Lambda: Process Results]
+        C -->|Job Ready| D[Lambda: ProcessResults]
         D -->|Parse and Send Events| E[AWS EventBridge]
         D -->|Store Raw Logs| F[S3 Bucket]
         D -->|Cleanup| G[Cancel Splunk Job]
@@ -454,12 +538,13 @@ flowchart TD
 ```mermaid
 stateDiagram-v2
     [*] --> InitiateSplunkJob
-    InitiateSplunkJob --> PollJobStatus
-    PollJobStatus --> PollJobStatus: [Job Not Ready]
-    PollJobStatus --> ProcessResults: [Job Ready]
-    ProcessResults --> SendEvents
-    SendEvents --> StoreLogs
-    StoreLogs --> Cleanup
+    InitiateSplunkJob --> WaitForJobCompletion
+    WaitForJobCompletion --> PollJobStatus
+    PollJobStatus --> JobCompleteChoice
+    JobCompleteChoice --> ProcessResults: Job Ready
+    JobCompleteChoice --> CalculateWaitTime: Job Not Ready
+    CalculateWaitTime --> WaitForJobCompletion
+    ProcessResults --> Cleanup
     Cleanup --> [*]
 ```
 
@@ -492,23 +577,36 @@ sequenceDiagram
     L3->>Splunk: Cancel Job
 ```
 
-### Class Inheritance Diagram
+### Class Composition Diagram
 
 ```mermaid
 classDiagram
+    class IdentitySourceConfig{
+        +name: str
+        +query: str
+        +parser: BaseParser
+        +secret_name: str
+        +initial_wait_time: int
+        +chunk_size: int
+    }
+    class BaseParser{
+        <<Abstract>>
+        +parse(raw_logs)
+    }
+    class PingParser{
+        +parse(raw_logs)
+    }
+    class MyIDParser{
+        +parse(raw_logs)
+    }
+    BaseParser <|-- PingParser
+    BaseParser <|-- MyIDParser
     class GenericSplunkCollector{
-        +run_query(query, earliest_time)
-        +get_job(sid)
-        +connect()
+        +collect_logs()
     }
-    class PingCollector{
-        +process_ping_logs()
-    }
-    class MyIDCollector{
-        +process_myid_logs()
-    }
-    GenericSplunkCollector <|-- PingCollector
-    GenericSplunkCollector <|-- MyIDCollector
+    GenericSplunkCollector --> IdentitySourceConfig
+    GenericSplunkCollector --> SplunkService
+    GenericSplunkCollector --> AWSService
 ```
 
 ---
