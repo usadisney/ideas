@@ -41,7 +41,7 @@ The system is architected to handle large volumes of data efficiently, ensuring 
 
 **Workflow Steps**:
 
-- **Start Execution**: Triggered by an AWS CloudWatch Events schedule or manually.
+- **Start Execution**: Triggered by an AWS EventBridge schedule or manually.
 - **Initiate Splunk Job**: Invokes the `InitiateSplunkJob` Lambda function to start a search job.
 - **Wait State with Exponential Backoff**: Waits before polling, increasing the interval between polls to reduce API calls.
 - **Poll Job Status**: Invokes the `PollJobStatus` Lambda function to check if the Splunk job has completed.
@@ -279,7 +279,7 @@ def lambda_handler(event, context):
 - **Error Handling**: Robust exception management with retries where appropriate.
 - **Optimized Queries**: Refined queries for faster execution.
 
-**Sample Code for SplunkService Class**:
+**Sample Code for `SplunkService` Class**:
 
 ```python
 class SplunkService:
@@ -564,6 +564,93 @@ class PingParser(BaseParser):
 - **Sequence Numbers and Timestamps**: Included in events for ordering.
 - **Downstream Consumer Guidelines**: Provides documentation on handling data ordering.
 - **Testing for Ordering**: Includes tests to verify data consistency.
+
+---
+
+## Repository Structure
+
+```plaintext
+splunk-log-collector/
+├── README.md
+├── .gitignore
+├── .flake8
+├── pyproject.toml
+├── poetry.lock
+├── template.yaml             # AWS SAM template
+├── libs/                     # Shared libraries exported as a Lambda layer
+│   ├── __init__.py
+│   ├── collector/
+│   │   ├── __init__.py
+│   │   └── generic_collector.py
+│   ├── config/
+│   │   ├── __init__.py
+│   │   └── identity_source_config.py
+│   ├── parsers/
+│   │   ├── __init__.py
+│   │   ├── base_parser.py
+│   │   ├── ping_parser.py
+│   │   └── myid_parser.py
+│   ├── services/
+│   │   ├── __init__.py
+│   │   ├── aws_service.py
+│   │   └── splunk_service.py
+│   └── utils/
+│       ├── __init__.py
+│       ├── logger.py
+│       └── helpers.py
+├── src/                      # Lambda function handlers
+│   ├── initiate_splunk_job/
+│   │   ├── __init__.py
+│   │   └── handler.py        # Entry point for initiating Splunk jobs
+│   ├── poll_job_status/
+│   │   ├── __init__.py
+│   │   └── handler.py        # Entry point for polling job status
+│   ├── process_results/
+│   │   ├── __init__.py
+│   │   └── handler.py        # Entry point for processing results
+├── tests/
+│   ├── __init__.py
+│   ├── conftest.py           # Fixtures for tests
+│   ├── test_generic_collector.py
+│   ├── test_parsers.py
+│   ├── test_services.py
+│   └── test_handlers.py
+└── docs/
+    ├── architecture.md
+    ├── development_guide.md
+    └── images/
+        └── architecture.png
+```
+
+**Directory and File Descriptions**:
+
+- **`libs/`**: Contains shared libraries exported as a Lambda layer.
+  - **`collector/`**: Modules for the generic collector.
+    - **`generic_collector.py`**: Implements the collector using composition.
+  - **`config/`**: Configuration modules.
+    - **`identity_source_config.py`**: Defines configurations for identity sources.
+  - **`parsers/`**: Parser modules for different identity sources.
+    - **`base_parser.py`**: Base parser interface.
+    - **`ping_parser.py`**: Parser for Ping identity logs.
+    - **`myid_parser.py`**: Parser for MyID identity logs.
+  - **`services/`**: Service modules for external interactions.
+    - **`splunk_service.py`**: Handles interactions with Splunk REST API.
+    - **`aws_service.py`**: Manages AWS service interactions (EventBridge, S3).
+  - **`utils/`**: Utility modules.
+    - **`logger.py`**: Logging configuration using AWS Lambda Powertools.
+    - **`helpers.py`**: Helper functions.
+- **`src/`**: Contains Lambda function handlers.
+  - **`initiate_splunk_job/`**: Handler for initiating Splunk jobs.
+    - **`handler.py`**: Entry point for the Lambda function.
+  - **`poll_job_status/`**: Handler for polling Splunk job status.
+    - **`handler.py`**: Entry point for the Lambda function.
+  - **`process_results/`**: Handler for processing Splunk results.
+    - **`handler.py`**: Entry point for the Lambda function.
+- **`tests/`**: Contains unit tests.
+  - **`conftest.py`**: Fixtures and common test utilities.
+- **`docs/`**: Additional documentation.
+  - **`architecture.md`**: Detailed architecture documentation.
+  - **`development_guide.md`**: Guidelines for development.
 
 ---
 
