@@ -131,7 +131,7 @@ flowchart TD
 - **AWS Account** with permissions to deploy resources.
 - **Access to Splunk Instances** with REST API enabled.
 - **Poetry** for dependency management.
-- **AWS SAM CLI** for deployment.
+- **AWS SAM CLI** for local testing and development.
 - **Git**
 
 ### Installation
@@ -171,7 +171,18 @@ flowchart TD
 
 ### AWS Deployment
 
-This project uses AWS SAM (Serverless Application Model) for deployment.
+Deployment of the **Splunk Log Collector** is automated via a CI/CD pipeline in **GitLab**. When changes are merged into the `main` branch, the pipeline automatically builds and deploys the application to AWS.
+
+**CI/CD Pipeline Details:**
+
+- **Continuous Integration:** On every commit and merge request, automated tests, linters, and code quality checks are executed to ensure the integrity of the codebase.
+- **Continuous Deployment:** Upon merging changes into the `main` branch, the CI/CD pipeline handles the build and deployment process using AWS SAM and deploys the application to AWS.
+
+**Note:** Manual deployment steps are not required. For local development and testing, you can use AWS SAM CLI to build and test the application locally.
+
+**Local Testing and Development:**
+
+While deployment is automated, you can still build and test the application locally:
 
 1. **Build the SAM Application**
 
@@ -179,30 +190,23 @@ This project uses AWS SAM (Serverless Application Model) for deployment.
    sam build
    ```
 
-2. **Deploy the SAM Application**
+2. **Invoke Functions Locally**
 
    ```bash
-   sam deploy --guided
+   sam local invoke InitiateSplunkJobFunction --event events/trigger_event.json
    ```
 
-   During deployment, you will be prompted to specify:
+3. **Run the Application Locally**
 
-   - **Stack Name:** e.g., `splunk-log-collector-stack`
-   - **AWS Region:** e.g., `us-east-1`
-   - **Confirm Changes Before Deploying:** `Y`
-   - **Allow SAM CLI IAM Role Creation:** `Y`
-   - **Save Arguments to samconfig.toml:** `Y`
-
-3. **Post-Deployment Configuration**
-
-   - **AWS Secrets Manager:** Ensure your Splunk credentials are stored with the correct secret names.
-   - **EventBridge Configuration:** Verify that EventBridge rules are set up correctly to receive events.
+   ```bash
+   sam local start-api
+   ```
 
 ## Usage
 
 ### Triggering the Collector
 
-The log collection process is initiated via the AWS Step Functions State Machine. You can trigger it manually or set up an AWS CloudWatch Events rule to trigger it on a schedule.
+The log collection process is initiated via the AWS Step Functions State Machine. You can trigger it manually or set up an AWS EventBridge rule to trigger it on a schedule.
 
 **Manual Trigger:**
 
@@ -255,10 +259,10 @@ Store your Splunk credentials securely in AWS Secrets Manager.
 
 ### Splunk Queries
 
-Configure Splunk queries for each identity source in the `config.py` file or via environment variables.
+Configure Splunk queries for each identity source in the `identity_source_config.py` file or via environment variables.
 
 ```python
-# src/config/identity_source_config.py
+# libs/config/identity_source_config.py
 
 IDENTITY_SOURCE_CONFIGS = {
     "ping": IdentitySourceConfig(
@@ -294,11 +298,11 @@ splunk-log-collector/
 ├── pyproject.toml
 ├── poetry.lock
 ├── template.yaml             # AWS SAM template
-├── src/
+├── libs/                     # Shared libraries exported as a Lambda layer
+│   ├── __init__.py
 │   ├── collector/
 │   │   ├── __init__.py
-│   │   ├── generic_collector.py
-│   │   ├── handler.py        # Lambda function entry points
+│   │   └── generic_collector.py
 │   ├── config/
 │   │   ├── __init__.py
 │   │   └── identity_source_config.py
@@ -311,10 +315,20 @@ splunk-log-collector/
 │   │   ├── __init__.py
 │   │   ├── aws_service.py
 │   │   └── splunk_service.py
-│   ├── utils/
+│   └── utils/
+│       ├── __init__.py
+│       ├── logger.py
+│       └── helpers.py
+├── src/                      # Lambda function handlers
+│   ├── initiate_splunk_job/
 │   │   ├── __init__.py
-│   │   ├── logger.py
-│   │   └── helpers.py
+│   │   └── handler.py        # Entry point for initiating Splunk jobs
+│   ├── poll_job_status/
+│   │   ├── __init__.py
+│   │   └── handler.py        # Entry point for polling job status
+│   ├── process_results/
+│   │   ├── __init__.py
+│   │   └── handler.py        # Entry point for processing results
 ├── tests/
 │   ├── __init__.py
 │   ├── conftest.py           # Fixtures for tests
@@ -331,10 +345,9 @@ splunk-log-collector/
 
 ### Directory and File Descriptions
 
-- **`src/`**: Contains the source code.
-  - **`collector/`**: Modules for the generic collector and Lambda handlers.
+- **`libs/`**: Contains shared libraries exported as a Lambda layer.
+  - **`collector/`**: Modules for the generic collector.
     - **`generic_collector.py`**: Implements the collector using composition.
-    - **`handler.py`**: Entry points for AWS Lambda functions.
   - **`config/`**: Configuration modules.
     - **`identity_source_config.py`**: Defines configurations for identity sources.
   - **`parsers/`**: Parser modules for different identity sources.
@@ -347,6 +360,13 @@ splunk-log-collector/
   - **`utils/`**: Utility modules.
     - **`logger.py`**: Logging configuration using AWS Lambda Powertools.
     - **`helpers.py`**: Helper functions.
+- **`src/`**: Contains Lambda function handlers.
+  - **`initiate_splunk_job/`**: Handler for initiating Splunk jobs.
+    - **`handler.py`**: Entry point for the Lambda function.
+  - **`poll_job_status/`**: Handler for polling Splunk job status.
+    - **`handler.py`**: Entry point for the Lambda function.
+  - **`process_results/`**: Handler for processing Splunk results.
+    - **`handler.py`**: Entry point for the Lambda function.
 - **`tests/`**: Contains unit tests.
   - **`conftest.py`**: Fixtures and common test utilities.
 - **`docs/`**: Additional documentation.
@@ -366,7 +386,7 @@ poetry run pytest
 ### Generating Coverage Reports
 
 ```bash
-poetry run pytest --cov=src --cov-report=html
+poetry run pytest --cov=libs --cov=src --cov-report=html
 ```
 
 Open `htmlcov/index.html` in a browser to view the coverage report.
@@ -400,13 +420,13 @@ def test_initiate_job():
   - **Flake8:** For code style checks.
 
     ```bash
-    poetry run flake8 src/
+    poetry run flake8 libs/ src/
     ```
 
   - **Black:** For code formatting.
 
     ```bash
-    poetry run black src/
+    poetry run black libs/ src/
     ```
 
 - **Docstrings:** Use consistent and clear docstrings for modules, classes, and functions.
@@ -428,7 +448,7 @@ def test_initiate_job():
   - Maintain or improve code coverage.
   - Request at least one code review before merging.
 - **Code Reviews:**
-  - Use GitHub's pull request system.
+  - Use GitLab's merge request system.
   - Address all comments before approval.
 
 ### Dependency Management
@@ -450,11 +470,19 @@ def test_initiate_job():
 Utilize AWS Lambda Powertools for structured logging, metrics, and tracing.
 
 ```python
-# src/collector/handler.py
+# libs/utils/logger.py
 
-from aws_lambda_powertools import Logger, Metrics, Tracer
+from aws_lambda_powertools import Logger
 
 logger = Logger(service="splunk-log-collector")
+```
+
+```python
+# src/initiate_splunk_job/handler.py
+
+from aws_lambda_powertools import Metrics, Tracer
+from libs.utils.logger import logger
+
 metrics = Metrics(namespace="SplunkLogCollector")
 tracer = Tracer()
 
